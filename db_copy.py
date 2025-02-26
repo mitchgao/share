@@ -17,13 +17,13 @@ PRIMARY_KEYS = ["your_primary_key_column"]  # Adjust this based on your table sc
 engine = sqlalchemy.create_engine(f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}")
 
 def upsert_parquet_to_postgres(parquet_file, table_name, primary_keys, chunk_size=100000):
-    """Upsert parquet data into PostgreSQL efficiently in chunks, with auto cleanup on errors."""
+    """Upsert parquet data into PostgreSQL efficiently in chunks, handling column name issues."""
     
     try:
         parquet_file = pq.ParquetFile(parquet_file)
         
-        with engine.begin() as conn:  # Auto-commits or rollbacks on failure
-            with conn.connection.cursor() as cursor:  # Auto-closes cursor
+        with engine.begin() as conn:  # Auto-commit or rollback on failure
+            with conn.connection.cursor() as cursor:  # Auto-close cursor
 
                 for batch in parquet_file.iter_batches(batch_size=chunk_size):
                     df = batch.to_pandas()
@@ -36,16 +36,20 @@ def upsert_parquet_to_postgres(parquet_file, table_name, primary_keys, chunk_siz
                     # Fast bulk insert using COPY FROM
                     cursor.copy_from(output, table_name, sep="\t", null="")
 
-                    # Generate ON CONFLICT SQL clause dynamically
-                    update_clause = ", ".join([f"{col} = EXCLUDED.{col}" for col in df.columns if col not in primary_keys])
-                    conflict_clause = f"ON CONFLICT ({', '.join(primary_keys)}) DO UPDATE SET {update_clause}"
+                    # **Fix: Enclose column names in double quotes**
+                    col_names = ", ".join(f'"{col}"' for col in df.columns)
+                    key_names = ", ".join(f'"{key}"' for key in primary_keys)
+                    update_clause = ", ".join([f'"{col}" = EXCLUDED."{col}"' for col in df.columns if col not in primary_keys])
 
                     # Perform upsert
-                    cursor.execute(f"""
-                        INSERT INTO {table_name} ({', '.join(df.columns)}) 
+                    values_placeholder = ", ".join(["%s"] * len(df.columns))  # Placeholder for values
+
+                    sql_query = f"""
+                        INSERT INTO {table_name} ({col_names}) 
                         VALUES {', '.join(str(tuple(row)) for row in df.itertuples(index=False))}
-                        {conflict_clause}
-                    """)
+                        ON CONFLICT ({key_names}) DO UPDATE SET {update_clause}
+                    """
+                    cursor.execute(sql_query)
 
     except Exception as e:
         print(f"Error occurred: {e}")  # Log error
