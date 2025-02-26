@@ -36,6 +36,22 @@ class Message(Base):
     role = Column(Text, nullable=False)
     content = Column(Text, nullable=False)
 
+# Additional tables
+class Orders(Base):
+    __tablename__ = "orders"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False)
+    product = Column(Text, nullable=False)
+    amount = Column(Integer, nullable=False)
+
+class Users(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(Text, nullable=False)
+    email = Column(Text, nullable=False)
+
 Base.metadata.create_all(engine)
 
 # Initialize vector store
@@ -46,15 +62,44 @@ def load_or_create_vectorstore():
         table_name="knowledge_base",
         embedding_function=embeddings
     )
+    
+    session = SessionLocal()
+    tables = ["conversations", "messages", "orders", "users"]
+    documents = []
+    
+    for table in tables:
+        rows = session.execute(f"SELECT * FROM {table}").fetchall()
+        for row in rows:
+            doc_content = f"Table: {table}\nColumns: {', '.join(row.keys())}\nData: {row}"
+            documents.append(Document(page_content=doc_content))
+    
+    session.close()
+    vectorstore.add_documents(documents)
     return vectorstore
 
 vectorstore = load_or_create_vectorstore()
 retriever = vectorstore.as_retriever()
 
-# Structured prompt template
+# Updated structured prompt template with table relationships
 query_prompt = PromptTemplate(
     input_variables=["question"],
-    template="You are a helpful assistant. Retrieve relevant knowledge and generate an accurate answer.\n\nQuestion: {question}\n\nAnswer:"
+    template="""
+    You are a helpful assistant. Use the provided database schema and relationships to answer questions.
+    
+    Tables:
+    - conversations(id, name): Stores different user conversations.
+    - messages(id, conversation_id, role, content): Stores messages within a conversation.
+    - orders(id, user_id, product, amount): Stores user orders and their products.
+    - users(id, name, email): Stores user details.
+    
+    Relationships:
+    - messages are linked to conversations via conversation_id.
+    - orders are linked to users via user_id.
+    
+    Question: {question}
+    
+    Answer:
+    """
 )
 
 def chat_with_rag(conversation_id, user_input):
