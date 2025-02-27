@@ -42,20 +42,18 @@ app.layout = dmc.MantineProvider(
     )
 )
 
-# Clientside Callback
-app.clientside_callback(
-    """
-    function(n_clicks) {
-        if (!n_clicks) return [{"base": 250}, ["tabler-chevron-left"]];
-        return (n_clicks % 2 === 1) 
-            ? [{"base": 0}, ["tabler-chevron-right"]] 
-            : [{"base": 250}, ["tabler-chevron-left"]];
-    }
-    """,
-    Output("navbar", "width"),
-    Output("toggle-button", "icon"),
+@app.callback(
+    Output("app-shell", "navbar"),
+    Output("toggle-button", "children"),
     Input("toggle-button", "n_clicks"),
+    State("app-shell", "navbar"),  # Get the current navbar dict
+    prevent_initial_call=True,
 )
+def toggle_navbar(n_clicks, navbar):
+    """ Updates the original navbar dictionary instead of creating a new one """
+    navbar["collapsed"] = not navbar.get("collapsed", False)  # Toggle collapsed state
+    icon = dmc.Icon("tabler-chevron-right" if navbar["collapsed"] else "tabler-chevron-left", size=20)
+    return navbar, icon
 
 if __name__ == "__main__":
     app.run_server(debug=True)
