@@ -1,16 +1,20 @@
 from flask import Flask, redirect, url_for, session, request
-from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+import dash
+import dash_html_components as html
+import dash_bootstrap_components as dbc
+from dash.dependencies import Input, Output
 import requests
 from msal import ConfidentialClientApplication
 
-# Flask app setup
-app = Flask(__name__)
-app.secret_key = "your_secret_key"
+# Flask setup
+server = Flask(__name__)
+server.secret_key = "your_secret_key"
 
 # Flask-Login setup
 login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = "login"
+login_manager.init_app(server)
+login_manager.login_view = "/login"
 
 # Azure AD Configuration
 TENANT_ID = "your_tenant_id"
@@ -20,14 +24,14 @@ AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 SCOPES = ["https://graph.microsoft.com/.default"]
 REDIRECT_URI = "http://localhost:5000/getAToken"
 
-# Group ID to check
+# Required Azure AD Group ID
 REQUIRED_GROUP_ID = "your_group_id"
 
 # MSAL client
 msal_app = ConfidentialClientApplication(CLIENT_ID, CLIENT_SECRET, AUTHORITY)
 
 
-# User class for Flask-Login
+# Flask-Login User class
 class User(UserMixin):
     def __init__(self, user_id, name, email):
         self.id = user_id
@@ -41,16 +45,16 @@ def load_user(user_id):
     return session.get("user")
 
 
-@app.route("/login")
+@server.route("/login")
 def login():
-    """Redirects user to Microsoft's login page."""
+    """Redirect user to Microsoft Login"""
     auth_url = msal_app.get_authorization_request_url(SCOPES, redirect_uri=REDIRECT_URI)
     return redirect(auth_url)
 
 
-@app.route("/getAToken")
+@server.route("/getAToken")
 def get_token():
-    """Handles Azure AD OAuth callback."""
+    """Handles Azure AD OAuth callback"""
     code = request.args.get("code")
     if not code:
         return "Authorization failed", 400
@@ -82,24 +86,65 @@ def get_token():
     session["user"] = user
     login_user(user)
 
-    return redirect(url_for("protected"))
+    return redirect("/")
 
 
-@app.route("/logout")
+@server.route("/logout")
 @login_required
 def logout():
-    """Logs out the user."""
+    """Logs out the user"""
     logout_user()
     session.pop("user", None)
-    return redirect(url_for("login"))
+    return redirect("/")
 
 
-@app.route("/protected")
-@login_required
-def protected():
-    """Protected route only accessible to logged-in users."""
-    return f"Hello, {session['user'].name}! You have access."
+# Initialize Dash App
+app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.BOOTSTRAP])
+
+# Layout
+app.layout = html.Div([
+    dbc.NavbarSimple(
+        children=[
+            dbc.NavItem(dbc.NavLink("Login", href="/login", id="login-link")),
+            dbc.NavItem(dbc.NavLink("Logout", href="/logout", id="logout-link", style={"display": "none"})),
+        ],
+        brand="Dash App with Azure AD Auth",
+        color="primary",
+        dark=True,
+    ),
+    html.Div(id="page-content")
+])
 
 
+# Callback to update navbar based on login status
+@app.callback(
+    Output("login-link", "style"),
+    Output("logout-link", "style"),
+    Input("page-content", "children")  # Just a dummy trigger
+)
+def update_navbar(_):
+    if current_user.is_authenticated:
+        return {"display": "none"}, {"display": "block"}
+    return {"display": "block"}, {"display": "none"}
+
+
+@app.callback(
+    Output("page-content", "children"),
+    Input("page-content", "children")  # Dummy input for triggering updates
+)
+def display_page(_):
+    if current_user.is_authenticated:
+        return html.Div([
+            html.H2(f"Welcome, {current_user.name}!"),
+            html.P("You are authorized to view this page."),
+        ])
+    else:
+        return html.Div([
+            html.H2("Please log in to access the application."),
+            html.A("Login", href="/login")
+        ])
+
+
+# Run the server
 if __name__ == "__main__":
     app.run(debug=True)
