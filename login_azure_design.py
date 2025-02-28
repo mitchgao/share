@@ -152,13 +152,24 @@ if __name__ == "__main__":
 
 
 
-
 import requests
 
-SPN_ID = "your_spn_id"
-SPN_SECRET = "your_spn_password"
+SPN_ID = "your_spn_id"  # This is the Application (Client) ID
+SPN_SECRET = "your_spn_password"  # This is the SPN password
+AUTHORITY = "https://login.microsoftonline.com"
 
-url = "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration"
-response = requests.get(url)
-data = response.json()
-print("TENANT_ID:", data.get("issuer").split("/")[3])  # Extract Tenant ID
+# Try to authenticate with Azure AD
+token_url = f"{AUTHORITY}/organizations/oauth2/v2.0/token"
+data = {
+    "grant_type": "client_credentials",
+    "client_id": SPN_ID,
+    "client_secret": SPN_SECRET,
+    "scope": "https://graph.microsoft.com/.default"
+}
+
+response = requests.post(token_url, data=data)
+if response.status_code == 200:
+    tenant_id = response.json().get("token_type", "").split("/")[3]  # Extract Tenant ID
+    print("TENANT_ID:", tenant_id)
+else:
+    print("Failed to retrieve Tenant ID:", response.json())
