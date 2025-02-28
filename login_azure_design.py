@@ -148,3 +148,17 @@ def display_page(_):
 # Run the server
 if __name__ == "__main__":
     app.run(debug=True)
+
+
+
+
+
+import requests
+
+SPN_ID = "your_spn_id"
+SPN_SECRET = "your_spn_password"
+
+url = "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration"
+response = requests.get(url)
+data = response.json()
+print("TENANT_ID:", data.get("issuer").split("/")[3])  # Extract Tenant ID
