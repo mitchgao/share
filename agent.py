@@ -1,10 +1,15 @@
 from typing import List
 from langchain_openai import AzureOpenAI
-from langchain_sql_database import SQLDatabase, SQLDatabaseToolkit
-from langchain.memory import memorySaver
-from langchain.agents.react import create_react_agent
+from langchain_sql_database import SQLDatabase
+from langchain.tools.sql_database.tool import (
+    QuerySQLDataBaseTool,
+    InfoSQLDatabaseTool,
+    ListSQLDatabaseTool,
+)
+from langchain.memory import ConversationSummaryBufferMemory
+import langgraph
 
-# --- Your database/auth setup ---
+# --- LLM and DB setup ---
 llm = AzureOpenAI(
     api_key="YOUR_AZURE_OPENAI_KEY",
     azure_endpoint="https://YOUR_RESOURCE_NAME.openai.azure.com/",
@@ -12,9 +17,9 @@ llm = AzureOpenAI(
     api_version="2023-05-15",
     model="gpt-35-turbo"
 )
-db = SQLDatabase.from_uri("postgresql+psycopg2://user:password@host:port/dbname") # <-- your DB
+db = SQLDatabase.from_uri("postgresql+psycopg2://user:password@host:port/dbname")
 
-# --- Helper: Load business mapping table ---
+# --- Load product code mapping from DB ---
 def load_product_map_table(db) -> List[dict]:
     res = db._execute(
         "SELECT pro_clasfn_c, pro_lvl2_c, pro_clasfn_t, pro_lvl2_t, first_level, second_level "
@@ -25,7 +30,7 @@ product_map = load_product_map_table(db)
 pro_clasfn_c_set = sorted({row["pro_clasfn_c"] for row in product_map})
 pro_lvl2_c_set = sorted({row["pro_lvl2_c"] for row in product_map})
 
-# --- Compose detailed schema and constraints context ---
+# --- Compose schema and constraints context ---
 def build_schema_documentation(product_map: List[dict]) -> str:
     doc = []
     doc.append("Table: trade_volume_by_product")
@@ -62,8 +67,7 @@ def build_schema_documentation(product_map: List[dict]) -> str:
 
 schema_context = build_schema_documentation(product_map)
 
-# --- System prompt for deep schema reasoning ---
-AGENT_SYSTEM_PROMPT = f"""
+SYSTEM_PROMPT = f"""
 You are a senior business analyst agent for the trading desk and senior management.
 
 - Your job is to answer business questions about trade volume, commissions, and trends.
@@ -77,20 +81,48 @@ Here is your schema, field constraints, and mapping context:
 {schema_context}
 """
 
-# --- Build agent using SQLDatabase tools (LLM will create/execute SQL via ReAct) ---
-toolkit = SQLDatabaseToolkit(db=db, llm=llm)
-agent = create_react_agent(
+# --- ConversationSummaryBufferMemory: summarize history automatically after k exchanges ---
+memory = ConversationSummaryBufferMemory(
     llm=llm,
-    tools=toolkit.get_tools(),
-    system_prompt=AGENT_SYSTEM_PROMPT,
-    memory=memorySaver(max_length=8),
-    verbose=True
+    k=8,  # number of recent exchanges to keep before summarizing
 )
 
+# --- SQL Database Tools (directly from DB object) ---
+tools = [
+    QuerySQLDataBaseTool(db=db),
+    InfoSQLDatabaseTool(db=db),
+    ListSQLDatabaseTool(db=db),
+]
+
+# --- LangGraph node as a multi-modal "agent" ---
+from langgraph.graph import MessageGraph
+
+graph = MessageGraph()
+# Memory can be attached to the graph state or passed explicitly if needed
+
+@graph.node
+def business_agent_node(state, message):
+    # The memory object keeps the conversation state and can summarize long histories.
+    # The tools are passed in; LLM prompt is in SYSTEM_PROMPT.
+    from langchain.agents.react import create_react_agent
+    agent = create_react_agent(
+        llm=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        memory=memory,
+        verbose=True
+    )
+    result = agent.invoke({"input": message})
+    return result["output"]
+
+graph.add_edge(graph.start, business_agent_node)
+graph.add_edge(business_agent_node, graph.end)
+
+# --- How to use with a user query ---
 def ask_agent(question):
-    print("\nUSER:", question)
-    resp = agent.invoke({"input": question})
-    print("AGENT:", resp["output"])
+    print('\nUSER:', question)
+    result = graph.run(message=question)
+    print('AGENT:', result)
 
 if __name__ == "__main__":
     ask_agent("Why are equity commissions down 10% week over week?")
